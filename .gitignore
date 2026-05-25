@@ -1,0 +1,40 @@
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# DeepFace cache y modelos descargados
+*.pkl
+*.h5
+*.weights.h5
+.deepface/
+
+# Capturas y base de datos de rostros
+capturas/
+faces_db/
+
+# Variables de entorno
+.env
+
+# Logs
+*.log
+logs/
+
+# TensorFlow / Keras cache
+~/.keras/
+~/.deepface/
+
+# IDE
+.vscode/
+.idea/
+*.swp
