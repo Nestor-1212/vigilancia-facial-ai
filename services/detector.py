@@ -22,8 +22,12 @@ THRESHOLD  = float(os.getenv("DEEPFACE_THRESHOLD", "0.40"))
 LARAVEL    = os.getenv("LARAVEL_URL", "http://localhost:8000")
 TOKEN      = os.getenv("LARAVEL_SERVICE_TOKEN", "")
 
-CAPTURAS_DIR = Path("./capturas")
-CAPTURAS_DIR.mkdir(exist_ok=True)
+_STORAGE_ROOT = Path(os.getenv(
+    "LARAVEL_STORAGE_PATH",
+    "C:/Users/Nestor/Desktop/vigilancia-facial/storage/app/public",
+))
+CAPTURAS_DIR = _STORAGE_ROOT / "capturas"
+CAPTURAS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
@@ -47,7 +51,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": 0.0,
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": "sin_rostro",
         }
@@ -58,7 +62,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": 0.0,
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": "sin_rostro",
         }
@@ -71,7 +75,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": 0.5,
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": "db_vacia",
         }
@@ -93,7 +97,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": 0.0,
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": f"error_find: {str(e)}",
         }
@@ -105,7 +109,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": 0.5,
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": "no_coincide",
         }
@@ -120,7 +124,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
             "identificado": False,
             "persona_id": None,
             "confianza": round(confianza, 3),
-            "captura": str(captura_path) if captura_path else None,
+            "captura": captura_path,
             "embedding": None,
             "mensaje": "baja_confianza",
         }
@@ -137,7 +141,7 @@ def analizar_frame(frame: np.ndarray, camara_id: int) -> dict:
         "identificado": True,
         "persona_id": persona_id,
         "confianza": round(confianza, 3),
-        "captura": str(captura_path) if captura_path else None,
+        "captura": captura_path,
         "embedding": embedding,
         "mensaje": "identificado",
     }
@@ -178,14 +182,19 @@ def registrar_rostro(persona_id: int, imagen: np.ndarray) -> str:
     return str(ruta)
 
 
-def _guardar_captura(frame: np.ndarray, camara_id: int) -> Optional[Path]:
+def guardar_captura(frame: np.ndarray, camara_id: int) -> Optional[str]:
+    """Guarda el frame en el storage público de Laravel y retorna la ruta relativa (capturas/filename.jpg)."""
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        ruta = CAPTURAS_DIR / f"cam{camara_id}_{ts}.jpg"
-        cv2.imwrite(str(ruta), frame)
-        return ruta
+        filename = f"cam{camara_id}_{ts}.jpg"
+        cv2.imwrite(str(CAPTURAS_DIR / filename), frame)
+        return f"capturas/{filename}"
     except Exception:
         return None
+
+
+def _guardar_captura(frame: np.ndarray, camara_id: int) -> Optional[str]:
+    return guardar_captura(frame, camara_id)
 
 
 def _extraer_persona_id(identity_path: str) -> Optional[int]:

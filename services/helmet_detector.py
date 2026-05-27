@@ -11,6 +11,8 @@ import numpy as np
 import logging
 import time
 
+from services.detector import guardar_captura
+
 logger = logging.getLogger(__name__)
 
 COOLDOWN_SEGUNDOS = 8
@@ -82,6 +84,19 @@ class HelmetDetector:
         confianza_max = max(r["confianza"] for r in rostros)
         mensaje = "sin_casco" if sin_casco_count > 0 else "con_casco"
 
+        # Captura anotada: solo cuando hay violación (prueba de incumplimiento)
+        captura = None
+        if sin_casco_count > 0:
+            anotado = frame.copy()
+            for i, (x, y, w, h) in enumerate(faces):
+                tiene = rostros[i]["tiene_casco"] if i < len(rostros) else False
+                color = (0, 200, 0) if tiene else (0, 0, 220)
+                cv2.rectangle(anotado, (x, y), (x + w, y + h), color, 2)
+                etiqueta = "OK" if tiene else "SIN CASCO"
+                cv2.putText(anotado, etiqueta, (x, max(y - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            captura = guardar_captura(anotado, camara_id)
+
         return {
             "camara_id": camara_id,
             "mensaje": mensaje,
@@ -91,6 +106,7 @@ class HelmetDetector:
             "total_rostros": int(len(faces)),
             "sin_casco": sin_casco_count,
             "tipo_deteccion": "casco",
+            "captura": captura,
             "rostros": rostros,
         }
 
