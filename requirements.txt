@@ -9,3 +9,5 @@ numpy==1.26.4
 Pillow==10.4.0
 tf-keras==2.18.0
 tensorflow==2.18.0
+ultralytics>=8.2.0
+mediapipe>=0.10.0

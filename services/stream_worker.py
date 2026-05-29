@@ -20,6 +20,7 @@ from typing import Dict, Literal
 from services.detector import analizar_frame, enviar_resultado_a_laravel
 from services.mask_detector import analizar_frame_tapaboca, debe_enviar_alerta
 from services.helmet_detector import analizar_frame_casco, debe_enviar_alerta_casco
+from services.phone_detector import analizar_frame_celular, enviar_celular_a_laravel, set_session_id
 from services.frame_buffer import frame_buffer
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,24 @@ logger = logging.getLogger(__name__)
 STREAM_FPS  = int(os.getenv("STREAM_FPS", "1"))
 MAX_STREAMS = int(os.getenv("MAX_STREAMS", "10"))
 
-ModDeteccion = Literal["reconocimiento_facial", "tapaboca", "casco", "ambos"]
+ModDeteccion = Literal[
+    "reconocimiento_facial",
+    "tapaboca", "casco", "ambos",
+    "celular",
+    "tapaboca_celular", "casco_celular", "ambos_celular",
+]
+
+# Mapa modo → conjunto de detectores activos
+_MODOS_DETECTORES: dict[str, frozenset] = {
+    "reconocimiento_facial": frozenset(),
+    "tapaboca":              frozenset({"tapaboca"}),
+    "casco":                 frozenset({"casco"}),
+    "ambos":                 frozenset({"tapaboca", "casco"}),
+    "celular":               frozenset({"celular"}),
+    "tapaboca_celular":      frozenset({"tapaboca", "celular"}),
+    "casco_celular":         frozenset({"casco", "celular"}),
+    "ambos_celular":         frozenset({"tapaboca", "casco", "celular"}),
+}
 
 
 class StreamWorker:
@@ -101,16 +119,17 @@ class StreamWorker:
 
     # ── Análisis según modo ───────────────────────────────────
     def _analizar(self, frame) -> list[dict]:
-        if self.modo == "tapaboca":
-            return [analizar_frame_tapaboca(frame, self.camara_id)]
-        if self.modo == "casco":
-            return [analizar_frame_casco(frame, self.camara_id)]
-        if self.modo == "ambos":
-            return [
-                analizar_frame_tapaboca(frame, self.camara_id),
-                analizar_frame_casco(frame, self.camara_id),
-            ]
-        return [analizar_frame(frame, self.camara_id)]
+        activos = _MODOS_DETECTORES.get(self.modo, frozenset())
+        resultados = []
+        if "tapaboca" in activos:
+            resultados.append(analizar_frame_tapaboca(frame, self.camara_id))
+        if "casco" in activos:
+            resultados.append(analizar_frame_casco(frame, self.camara_id))
+        if "celular" in activos:
+            resultados.append(analizar_frame_celular(frame, self.camara_id))
+        if not resultados:
+            resultados.append(analizar_frame(frame, self.camara_id))
+        return resultados
 
     # ── Envío a Laravel ───────────────────────────────────────
     def _enviar_si_relevante(self, loop: asyncio.AbstractEventLoop, resultados: list[dict]):
@@ -124,6 +143,13 @@ class StreamWorker:
             elif tipo == "casco":
                 if mensaje == "sin_casco" and debe_enviar_alerta_casco(self.camara_id):
                     loop.run_until_complete(enviar_resultado_a_laravel(resultado))
+            elif tipo == "celular":
+                if resultado.get("es_nuevo"):
+                    session_id = loop.run_until_complete(enviar_celular_a_laravel(resultado))
+                    if session_id:
+                        set_session_id(self.camara_id, session_id)
+                elif resultado.get("finalizado"):
+                    loop.run_until_complete(enviar_celular_a_laravel(resultado))
             else:
                 if mensaje != "sin_rostro":
                     loop.run_until_complete(enviar_resultado_a_laravel(resultado))

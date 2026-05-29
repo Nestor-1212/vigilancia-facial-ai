@@ -31,9 +31,10 @@ from PIL import Image
 
 load_dotenv()
 
-from models.schemas import ResultadoAnalisis, ResultadoTapaboca, StreamConfig, RegistrarRostroRequest
+from models.schemas import ResultadoAnalisis, ResultadoTapaboca, ResultadoCelular, StreamConfig, RegistrarRostroRequest
 from services.detector import analizar_frame, registrar_rostro, FACES_DB
 from services.mask_detector import analizar_frame_tapaboca
+from services.phone_detector import analizar_frame_celular
 from services.stream_worker import stream_manager
 from services.frame_buffer import frame_buffer
 
@@ -291,6 +292,30 @@ async def analizar_tapaboca_webcam(camara_id: int, indice_webcam: int = 0):
 
     resultado = analizar_frame_tapaboca(frame, camara_id)
     return ResultadoTapaboca(**{k: resultado[k] for k in ResultadoTapaboca.model_fields})
+
+
+# ──────────────────────────────────────────────────────────
+# DETECCIÓN DE CELULAR EN MANO
+# ──────────────────────────────────────────────────────────
+
+@app.post("/celular/analizar", response_model=ResultadoCelular, tags=["Celular"])
+async def analizar_celular(
+    camara_id: int = Form(...),
+    imagen: UploadFile = File(...),
+):
+    """
+    Recibe una imagen y detecta si alguna persona tiene un celular en la mano.
+    Usa YOLOv8 para detectar el dispositivo, MediaPipe para verificar la mano
+    y DeepFace para identificar al portador.
+    """
+    contenido = await imagen.read()
+    frame = _bytes_a_frame(contenido)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="No se pudo decodificar la imagen")
+
+    resultado = analizar_frame_celular(frame, camara_id)
+    data = {k: v for k, v in resultado.items() if k in ResultadoCelular.model_fields and v is not None}
+    return ResultadoCelular(**data)
 
 
 @app.post("/stream/start", tags=["Streams"])
