@@ -15,18 +15,20 @@ import cv2
 import logging
 import os
 from threading import Thread, Event
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional
 
 from services.detector import analizar_frame, enviar_resultado_a_laravel
 from services.mask_detector import analizar_frame_tapaboca, debe_enviar_alerta
 from services.helmet_detector import analizar_frame_casco, debe_enviar_alerta_casco
 from services.phone_detector import analizar_frame_celular, enviar_celular_a_laravel, set_session_id
 from services.frame_buffer import frame_buffer
+from services.ppe_detector import SuavizadorEPP, procesar_frame_stream, enviar_a_laravel as enviar_epp_a_laravel
 
 logger = logging.getLogger(__name__)
 
 STREAM_FPS  = int(os.getenv("STREAM_FPS", "1"))
 MAX_STREAMS = int(os.getenv("MAX_STREAMS", "10"))
+SENAL_TIMEOUT = float(os.getenv("SENAL_TIMEOUT", str(max(10, 5 / STREAM_FPS))))
 
 ModDeteccion = Literal[
     "reconocimiento_facial",
@@ -55,11 +57,15 @@ class StreamWorker:
         rtsp_url: str,
         nombre: str = "",
         modo: ModDeteccion = "reconocimiento_facial",
+        requeridos: Optional[list[str]] = None,
     ):
         self.camara_id = camara_id
         self.rtsp_url  = rtsp_url
         self.nombre    = nombre
         self.modo      = modo
+        # Fase 2: elementos que verifica el modelo de EPP (casco, botas, guantes…)
+        self.requeridos = list(requeridos or [])
+        self._suavizador = SuavizadorEPP() if self.requeridos else None
         self._stop_evt = Event()
         self._thread: Thread = None
 
@@ -127,7 +133,11 @@ class StreamWorker:
             resultados.append(analizar_frame_casco(frame, self.camara_id))
         if "celular" in activos:
             resultados.append(analizar_frame_celular(frame, self.camara_id))
-        if not resultados:
+        if self.requeridos:
+            payload = procesar_frame_stream(frame, self.camara_id, self.requeridos, self._suavizador)
+            if payload:
+                resultados.append({"tipo_deteccion": "epp", **payload})
+        if not resultados or all(r.get("tipo_deteccion") == "epp" for r in resultados):
             resultados.append(analizar_frame(frame, self.camara_id))
         return resultados
 
@@ -143,6 +153,9 @@ class StreamWorker:
             elif tipo == "casco":
                 if mensaje == "sin_casco" and debe_enviar_alerta_casco(self.camara_id):
                     loop.run_until_complete(enviar_resultado_a_laravel(resultado))
+            elif tipo == "epp":
+                datos = {k: v for k, v in resultado.items() if k != "tipo_deteccion"}
+                loop.run_until_complete(enviar_epp_a_laravel(datos))
             elif tipo == "celular":
                 if resultado.get("es_nuevo"):
                     session_id = loop.run_until_complete(enviar_celular_a_laravel(resultado))
@@ -167,6 +180,7 @@ class StreamManager:
         rtsp_url: str,
         nombre: str = "",
         modo: ModDeteccion = "reconocimiento_facial",
+        requeridos: Optional[list[str]] = None,
     ) -> bool:
         if camara_id in self._workers:
             logger.info(f"[Stream {camara_id}] Ya está corriendo")
@@ -175,7 +189,7 @@ class StreamManager:
             logger.warning("Límite de streams alcanzado")
             return False
 
-        worker = StreamWorker(camara_id, rtsp_url, nombre, modo)
+        worker = StreamWorker(camara_id, rtsp_url, nombre, modo, requeridos)
         worker.start()
         self._workers[camara_id] = worker
         return True
@@ -193,15 +207,20 @@ class StreamManager:
         self._workers.clear()
 
     def list_active(self) -> list:
-        return [
-            {
+        activos = []
+        for cid, w in self._workers.items():
+            edad = frame_buffer.segundos_desde_ultimo(cid)
+            activos.append({
                 "camara_id": cid,
                 "nombre": w.nombre,
                 "url": w.rtsp_url,
                 "modo": w.modo,
-            }
-            for cid, w in self._workers.items()
-        ]
+                "requeridos": w.requeridos,
+                # Hay señal si llegó un frame en los últimos SENAL_TIMEOUT segundos
+                "con_senal": edad is not None and edad <= SENAL_TIMEOUT,
+                "segundos_sin_frame": None if edad is None else round(edad, 1),
+            })
+        return activos
 
     def is_running(self, camara_id: int) -> bool:
         return camara_id in self._workers

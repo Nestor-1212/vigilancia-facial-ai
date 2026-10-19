@@ -1,0 +1,83 @@
+{
+  "_comentario": "Modelo de EPP activo. No lo edites a mano: activa un candidato desde Configuración → Modelos o con entrenamiento/activar.py. 'clases' traduce cada clase del modelo a un elemento del catálogo y si indica presencia o ausencia.",
+  "id": "referencia",
+  "archivo": "candidatos/referencia/modelo.pt",
+  "nombre": "YOLOv8s EPP de referencia (keremberke/protective-equipment-detection)",
+  "apto_produccion": false,
+  "advertencia": "Modelo público de referencia: mAP@0.5 = 0.28 y sin licencia declarada. Solo para desarrollo y pruebas.",
+  "confianza_minima": 0.25,
+  "clases": {
+    "helmet": {
+      "elemento": "casco",
+      "presente": true
+    },
+    "no_helmet": {
+      "elemento": "casco",
+      "presente": false
+    },
+    "mask": {
+      "elemento": "tapaboca",
+      "presente": true
+    },
+    "no_mask": {
+      "elemento": "tapaboca",
+      "presente": false
+    },
+    "goggles": {
+      "elemento": "lentes",
+      "presente": true
+    },
+    "no_goggles": {
+      "elemento": "lentes",
+      "presente": false
+    },
+    "glove": {
+      "elemento": "guantes",
+      "presente": true
+    },
+    "no_glove": {
+      "elemento": "guantes",
+      "presente": false
+    },
+    "shoes": {
+      "elemento": "botas",
+      "presente": true
+    },
+    "no_shoes": {
+      "elemento": "botas",
+      "presente": false
+    }
+  },
+  "_zonas_comentario": "Franja vertical del recuadro de cada persona (0 = cabeza, 1 = pies) donde debe aparecer cada elemento.",
+  "zonas_cuerpo": {
+    "casco": [
+      0.0,
+      0.3
+    ],
+    "tapaboca": [
+      0.05,
+      0.35
+    ],
+    "lentes": [
+      0.0,
+      0.3
+    ],
+    "chaleco": [
+      0.15,
+      0.7
+    ],
+    "guantes": [
+      0.25,
+      0.85
+    ],
+    "botas": [
+      0.75,
+      1.0
+    ]
+  },
+  "persona_altura_minima_px": 80,
+  "suavizado": {
+    "ventana": 5,
+    "minimo": 3
+  }
+}

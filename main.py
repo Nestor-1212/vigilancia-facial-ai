@@ -23,6 +23,11 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 import asyncio
+import base64
+import re
+from typing import Optional
+
+from pydantic import BaseModel
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -33,6 +38,7 @@ load_dotenv()
 
 from models.schemas import ResultadoAnalisis, ResultadoTapaboca, ResultadoCelular, StreamConfig, RegistrarRostroRequest
 from services.detector import analizar_frame, registrar_rostro, FACES_DB
+from services import ppe_detector, registro_modelos, descubrimiento
 from services.mask_detector import analizar_frame_tapaboca
 from services.phone_detector import analizar_frame_celular
 from services.stream_worker import stream_manager
@@ -70,7 +76,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://localhost:3000"],
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -318,6 +324,16 @@ async def analizar_celular(
     return ResultadoCelular(**data)
 
 
+async def _fuente_desde_laravel(camara_id: int) -> Optional[str]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{LARAVEL}/api/camaras/{camara_id}/fuente",
+                                 headers={"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"})
+            return r.json().get("url") if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 @app.post("/stream/start", tags=["Streams"])
 async def iniciar_stream(config: StreamConfig):
     """
@@ -325,14 +341,159 @@ async def iniciar_stream(config: StreamConfig):
     - rtsp_url: URL RTSP o "webcam:0" para cámara local
     - modo: "reconocimiento_facial" | "tapaboca"
     """
-    ok = stream_manager.start(config.camara_id, config.rtsp_url, config.nombre, config.modo)
+    # La URL con credenciales se pide a Laravel con el token de servicio: la contraseña nunca pasa por el navegador
+    fuente = await _fuente_desde_laravel(config.camara_id) or config.rtsp_url
+    ok = stream_manager.start(config.camara_id, fuente, config.nombre, config.modo, config.requeridos)
     if not ok:
         raise HTTPException(status_code=409, detail="El stream ya está activo o se alcanzó el límite")
     return {
         "mensaje": f"Stream {config.camara_id} iniciado",
         "camara_id": config.camara_id,
         "modo": config.modo,
+        "requeridos": config.requeridos,
     }
+
+
+# ──────────────────────────────────────────────────────────
+# EPP (Fase 2): capacidades del modelo y prueba con imágenes
+# ──────────────────────────────────────────────────────────
+
+@app.get("/capacidades", tags=["EPP"])
+async def capacidades_epp():
+    """Elementos de EPP que el modelo configurado sabe verificar."""
+    return await asyncio.to_thread(ppe_detector.capacidades)
+
+
+@app.post("/epp/probar", tags=["EPP"])
+async def probar_epp(imagen: UploadFile = File(...), requeridos: str = Form("")):
+    """
+    Analiza una foto y devuelve, por persona, si cada elemento está presente, falta o no se ve,
+    junto con la imagen anotada (JPEG en base64). No genera alertas.
+    """
+    datos = await imagen.read()
+    frame = cv2.imdecode(np.frombuffer(datos, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=422, detail="El archivo no es una imagen válida")
+    lista = [r.strip() for r in requeridos.split(",") if r.strip()]
+    if not lista:
+        lista = (await asyncio.to_thread(ppe_detector.capacidades)).get("elementos", [])
+    analisis = await asyncio.to_thread(ppe_detector.analizar, frame, lista)
+    if not analisis.get("disponible"):
+        raise HTTPException(status_code=503, detail=f"Modelo de EPP no disponible: {analisis.get('error')}")
+    anotada = ppe_detector.anotar(frame, analisis)
+    ok, jpg = cv2.imencode(".jpg", anotada, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return {
+        **analisis,
+        "resumen": ppe_detector.resumen(analisis, lista),
+        "requeridos": lista,
+        "imagen_anotada": "data:image/jpeg;base64," + base64.b64encode(jpg.tobytes()).decode() if ok else None,
+        "ancho": int(frame.shape[1]), "alto": int(frame.shape[0]),
+    }
+
+
+# ──────────────────────────────────────────────────────────
+# ALTA DE CÁMARAS: descubrimiento a partir de la IP
+# ──────────────────────────────────────────────────────────
+
+class DatosCamara(BaseModel):
+    ip: str
+    usuario: str = ""
+    password: str = ""
+
+
+@app.post("/camaras/descubrir", tags=["Cámaras"])
+async def descubrir_camara(d: DatosCamara):
+    """
+    Encuentra el video de una cámara solo con IP, usuario y contraseña (ONVIF o rutas RTSP conocidas)
+    y devuelve una vista previa. Las URLs se devuelven SIN credenciales.
+    """
+    ip = d.ip.strip()
+    if not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", ip):
+        raise HTTPException(status_code=422, detail="IP o nombre de equipo inválido")
+    logger.info(f"[Descubrir] {ip} (usuario: {d.usuario or '—'})")
+    return await asyncio.to_thread(descubrimiento.descubrir, ip, d.usuario, d.password)
+
+
+# ──────────────────────────────────────────────────────────
+# MODELOS Y ENTRENAMIENTO (Fase 3)
+# ──────────────────────────────────────────────────────────
+
+@app.get("/modelos", tags=["Modelos"])
+async def listar_modelos():
+    """Candidatos registrados (con métricas y aptitud), modelo activo y estado del conjunto de datos."""
+    cfg = registro_modelos.config_activa()
+    return {
+        "activo": {"id": cfg.get("id"), "nombre": cfg.get("nombre"), "apto_produccion": bool(cfg.get("apto_produccion")),
+                   "advertencia": cfg.get("advertencia"), "activado": cfg.get("activado")},
+        "hay_anterior": (registro_modelos.DIR_MODELOS / "config.anterior.json").exists(),
+        "candidatos": registro_modelos.listar_candidatos(),
+        "dataset": registro_modelos.estado_dataset(),
+        "criterios": {"map50": registro_modelos.UMBRAL_MAP50, "ap_por_clase": registro_modelos.UMBRAL_CLASE,
+                      "ejemplos_por_clase": registro_modelos.IMAGENES_MIN_POR_CLASE, "val_min": registro_modelos.VAL_MIN},
+    }
+
+
+class ActivarModelo(BaseModel):
+    forzar: bool = False
+
+
+@app.post("/modelos/{candidato_id}/activar", tags=["Modelos"])
+async def activar_modelo(candidato_id: str, datos: ActivarModelo):
+    """Activa un candidato. Sin 'forzar', solo si cumple los criterios de producción."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", candidato_id):
+        raise HTTPException(status_code=422, detail="Identificador inválido")
+    try:
+        r = registro_modelos.activar(candidato_id, datos.forzar)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    ok = await asyncio.to_thread(ppe_detector.recargar)
+    if not ok:
+        # Si el modelo nuevo no carga, se vuelve al anterior para no dejar el servicio sin EPP
+        registro_modelos.volver_al_anterior()
+        await asyncio.to_thread(ppe_detector.recargar)
+        raise HTTPException(status_code=500, detail="El modelo no se pudo cargar; se restauró el anterior.")
+    return r
+
+
+@app.post("/modelos/anterior", tags=["Modelos"])
+async def modelo_anterior():
+    """Vuelve al modelo que estaba activo antes del último cambio."""
+    try:
+        r = registro_modelos.volver_al_anterior()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    await asyncio.to_thread(ppe_detector.recargar)
+    return r
+
+
+@app.post("/modelos/recargar", tags=["Modelos"])
+async def recargar_modelo():
+    """Recarga el modelo activo desde config.json (lo usa entrenamiento/activar.py)."""
+    if not await asyncio.to_thread(ppe_detector.recargar):
+        raise HTTPException(status_code=500, detail="No se pudo cargar el modelo activo")
+    return {"id": registro_modelos.config_activa().get("id")}
+
+
+class MuestraEntrenamiento(BaseModel):
+    captura: str
+    origen: str = "alerta"
+    alerta_id: Optional[int] = None
+    camara_id: Optional[int] = None
+    validacion: Optional[str] = None
+    faltantes: list[str] = []
+
+
+@app.post("/dataset/muestras", tags=["Modelos"])
+async def recibir_muestra(m: MuestraEntrenamiento):
+    """Guarda una captura (ya almacenada por Laravel) como foto pendiente de etiquetar."""
+    nombre = registro_modelos.guardar_muestra(m.captura, m.model_dump(exclude={"captura"}))
+    if not nombre:
+        raise HTTPException(status_code=422, detail="Captura no encontrada en el almacenamiento de Laravel")
+    return {"guardada": nombre}
 
 
 # ──────────────────────────────────────────────────────────

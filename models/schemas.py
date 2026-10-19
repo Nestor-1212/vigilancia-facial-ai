@@ -48,6 +48,8 @@ class StreamConfig(BaseModel):
         "celular",
         "tapaboca_celular", "casco_celular", "ambos_celular",
     ] = "reconocimiento_facial"
+    # Fase 2: elementos de EPP que el modelo de EPP debe verificar en esta cámara
+    requeridos: list[str] = []
 
 
 class RegistrarRostroRequest(BaseModel):

@@ -1,0 +1,14 @@
+{
+  "id": "referencia",
+  "nombre": "YOLOv8s EPP de referencia (keremberke/protective-equipment-detection)",
+  "origen": "externo",
+  "creado": "2026-10-15T00:00:00",
+  "base": "keremberke/yolov8s-protective-equipment-detection (Hugging Face)",
+  "map50": 0.278,
+  "map50_95": null,
+  "por_clase": {},
+  "imagenes_val": null,
+  "apto_produccion": false,
+  "advertencia": "Modelo público de referencia: mAP@0.5 = 0.28 y sin licencia declarada. Solo para desarrollo y pruebas.",
+  "notas": "Métrica tomada de la ficha del modelo (validación del autor), no medida con datos propios."
+}

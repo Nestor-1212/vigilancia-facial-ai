@@ -1,0 +1,12 @@
+{
+  "helmet":     { "elemento": "casco",    "presente": true },
+  "no_helmet":  { "elemento": "casco",    "presente": false },
+  "mask":       { "elemento": "tapaboca", "presente": true },
+  "no_mask":    { "elemento": "tapaboca", "presente": false },
+  "goggles":    { "elemento": "lentes",   "presente": true },
+  "no_goggles": { "elemento": "lentes",   "presente": false },
+  "glove":      { "elemento": "guantes",  "presente": true },
+  "no_glove":   { "elemento": "guantes",  "presente": false },
+  "shoes":      { "elemento": "botas",    "presente": true },
+  "no_shoes":   { "elemento": "botas",    "presente": false }
+}

@@ -38,3 +38,16 @@ logs/
 .vscode/
 .idea/
 *.swp
+
+# Videos de demostración generados
+demo_videos/*.mp4
+
+# Pesos de modelos de EPP (se descargan aparte; ver modelos_epp/LEEME.md)
+modelos_epp/*.pt
+modelos_epp/ejemplo.jpg
+
+# Entrenamiento (fotos de clientes y resultados: no van a git)
+entrenamiento/dataset/
+entrenamiento/ejecuciones/
+modelos_epp/candidatos/*/modelo.pt
+modelos_epp/config.anterior.json
